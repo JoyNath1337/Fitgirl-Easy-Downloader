@@ -3,6 +3,8 @@ from bs4 import BeautifulSoup
 from tqdm import tqdm
 from datetime import datetime
 from colorama import Fore, Style
+import tkinter as tk
+from tkinter import filedialog, messagebox
 
 
 class console:
@@ -36,10 +38,32 @@ class console:
     def input(self, message):
         return input(f"{self.colors['lightblack']}{self.timestamp()} » {self.colors['lightcyan']}INPUT   {self.colors['lightblack']}• {self.colors['white']}{message}{self.colors['reset']}")
 
-downloads_folder = "downloads"
-os.makedirs(downloads_folder, exist_ok=True)
+def select_download_folder():
+    """Open a GUI dialog to select download folder"""
+    root = tk.Tk()
+    root.withdraw()
+    
+    downloads_folder = filedialog.askdirectory(
+        title="Select Download Folder",
+        initialdir=os.path.expanduser("~")
+    )
+    
+    root.destroy()
+
+    if not downloads_folder:
+        downloads_folder = "downloads"
+        messagebox.showinfo("Download Folder", f"No folder selected. Using default: {os.path.abspath(downloads_folder)}")
+    
+    return downloads_folder
+
 log = console()
 log.clear()
+
+log.info("Opening folder selection dialog", "Please select download folder...")
+downloads_folder = select_download_folder()
+
+os.makedirs(downloads_folder, exist_ok=True)
+log.success("Download location set", downloads_folder)
 
 headers = {
     'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
@@ -94,7 +118,12 @@ for link in links:
 
     soup = BeautifulSoup(response.text, 'html.parser')
     meta_title = soup.find('meta', attrs={'name': 'title'})
-    file_name = meta_title['content'] if meta_title else "default_file_name"
+    if meta_title:
+        file_name = meta_title['content']
+        # Clean filename to be safe for file system
+        file_name = re.sub(r'[<>:"/\\|?*]', '_', file_name)
+    else:
+        file_name = "default_file_name"
     script_tags = soup.find_all('script')
     download_function = None
     for script in script_tags:
