@@ -40,6 +40,8 @@ class console:
 log = console()
 log.clear()
 
+INPUT_FILE = 'input.txt'
+
 headers = {
     'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
     'accept-language': 'en-US,en;q=0.5',
@@ -71,27 +73,40 @@ def download_file(download_url, output_path):
     else:
         log.error(f"Failed To Download File", response.status_code)
 
-def remove_link(processed_link, input_file='input.txt'):
+def remove_link(processed_link, input_file=INPUT_FILE):
     with open(input_file, 'r') as file:
-        links = file.readlines()
-        
+        lines = file.readlines()
     with open(input_file, 'w') as file:
-        for link in links:
-            if link.strip() != processed_link:
-                file.write(link)
+        for line in lines:
+            if line.strip() != processed_link:
+                file.write(line)
 
-with open('input.txt', 'r') as file:
-    links = [line.strip() for line in file if line.strip()]
+# --- Read game name and links from input.txt ---
+with open(INPUT_FILE, 'r') as file:
+    all_lines = [line.strip() for line in file if line.strip()]
+
+if not all_lines:
+    log.warning("input.txt is empty", "run get_links.py first")
+    raise SystemExit(1)
+
+first_line = all_lines[0]
+if first_line.lower().startswith("game name"):
+    parts = first_line.split(":", 1)
+    if len(parts) == 2 and parts[1].strip():
+        game_name = parts[1].strip()
+        links = all_lines[1:]
+    else:
+        log.error("Game name line is malformed", first_line)
+        raise SystemExit(1)
+else:
+    log.error("No game name found in input.txt", "run get_links.py first")
+    raise SystemExit(1)
 
 if not links:
-    log.warning("input.txt is empty", "add links and rerun")
+    log.warning("No links found in input.txt", "run get_links.py first")
     raise SystemExit(1)
 
-first_game_link = next((l for l in links if "fitgirl-repacks.site" in urlparse(l).fragment), None)
-if not first_game_link:
-    log.error("Could not determine game name", "no fitgirl part files found in input.txt")
-    raise SystemExit(1)
-game_name = urlparse(first_game_link).fragment.split("--")[0].strip("_")
+log.info("Game", game_name)
 downloads_folder = os.path.join("downloads", game_name)
 os.makedirs(downloads_folder, exist_ok=True)
 log.info("Download folder", downloads_folder)
@@ -129,4 +144,3 @@ for link in links:
             log.error("No Download Url Found", response.status_code)
     else:
         log.error("Download Function Not Found", response.status_code)
-        
