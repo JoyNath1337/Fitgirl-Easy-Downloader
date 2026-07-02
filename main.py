@@ -129,4 +129,3 @@ for link in links:
             log.error("No Download Url Found", response.status_code)
     else:
         log.error("Download Function Not Found", response.status_code)
-        
