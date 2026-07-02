@@ -1,10 +1,8 @@
-import os, re, requests
-from urllib.parse import urlparse
+import os, re, requests, primp
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 from datetime import datetime
 from colorama import Fore, Style
-
 
 class console:
     def __init__(self) -> None:
@@ -37,6 +35,8 @@ class console:
     def input(self, message):
         return input(f"{self.colors['lightblack']}{self.timestamp()} » {self.colors['lightcyan']}INPUT   {self.colors['lightblack']}• {self.colors['white']}{message}{self.colors['reset']}")
 
+downloads_folder = "downloads"
+os.makedirs(downloads_folder, exist_ok=True)
 log = console()
 log.clear()
 
@@ -64,17 +64,17 @@ def download_file(download_url, output_path):
         ) as bar:
             for data in response.iter_content(block_size):
                 f.write(data)
-                bar.set_description(f"{log.colors['lightblack']}{log.timestamp()} » {log.colors['lightblue']}INFO {log.colors['lightblack']}• {log.colors['white']}Downloading -> {os.path.basename(output_path)[:55]} {log.colors['reset']}")
+                bar.set_description(f"{log.colors['lightblack']}{log.timestamp()} » {log.colors['lightblue']}INFO {log.colors['lightblack']}• {log.colors['white']}Downloading -> {output_path[:15]}...{output_path[55:]} {log.colors['reset']}")
                 bar.update(len(data))
 
         log.success(f"Successfully Downloaded File", F"{output_path[:35]}...{output_path[55:]}")
     else:
-        log.error(f"Failed To Download File", response.status_code)
+        log.error(f"Failed To Fownload File", response.status_code)
 
 def remove_link(processed_link, input_file='input.txt'):
     with open(input_file, 'r') as file:
         links = file.readlines()
-        
+
     with open(input_file, 'w') as file:
         for link in links:
             if link.strip() != processed_link:
@@ -83,22 +83,9 @@ def remove_link(processed_link, input_file='input.txt'):
 with open('input.txt', 'r') as file:
     links = [line.strip() for line in file if line.strip()]
 
-if not links:
-    log.warning("input.txt is empty", "add links and rerun")
-    raise SystemExit(1)
-
-first_game_link = next((l for l in links if "fitgirl-repacks.site" in urlparse(l).fragment), None)
-if not first_game_link:
-    log.error("Could not determine game name", "no fitgirl part files found in input.txt")
-    raise SystemExit(1)
-game_name = urlparse(first_game_link).fragment.split("--")[0].strip("_")
-downloads_folder = os.path.join("downloads", game_name)
-os.makedirs(downloads_folder, exist_ok=True)
-log.info("Download folder", downloads_folder)
-
 for link in links:
     log.info(f"Started Processing", f"{link[:30]}...{link[60:]}")
-    response = requests.get(link, headers=headers)
+    response = primp.get(link, headers=headers)
 
     if response.status_code != 200:
         log.error(f"Failed To Fetch Page", response.status_code)
@@ -129,4 +116,3 @@ for link in links:
             log.error("No Download Url Found", response.status_code)
     else:
         log.error("Download Function Not Found", response.status_code)
-        
