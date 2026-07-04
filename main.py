@@ -1,10 +1,9 @@
 import os, re, requests, primp
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 from datetime import datetime
 from colorama import Fore, Style
-
 
 class console:
     def __init__(self) -> None:
@@ -67,9 +66,9 @@ def download_file(download_url, output_path):
                 bar.set_description(f"{log.colors['lightblack']}{log.timestamp()} » {log.colors['lightblue']}INFO {log.colors['lightblack']}• {log.colors['white']}Downloading -> {os.path.basename(output_path)[:55]} {log.colors['reset']}")
                 bar.update(len(data))
 
-        log.success(f"Successfully Downloaded File", F"{output_path[:35]}...{output_path[55:]}")
+        log.success(f"Successfully downloaded file", F"{output_path[:35]}...{output_path[55:]}")
     else:
-        log.error(f"Failed To Download File", response.status_code)
+        log.error(f"Failed to download file", response.status_code)
 
 def remove_link(processed_link, input_file='input.txt'):
     with open(input_file, 'r') as file:
@@ -84,7 +83,7 @@ with open('input.txt', 'r') as file:
     links = [line.strip() for line in file if line.strip()]
 
 if not links:
-    log.warning("input.txt is empty", "add links and rerun")
+    log.warning("input.txt is empty", "add links and re-run")
     raise SystemExit(1)
 
 first_game_link = next((l for l in links if "fitgirl-repacks.site" in urlparse(l).fragment), None)
@@ -97,35 +96,56 @@ os.makedirs(downloads_folder, exist_ok=True)
 log.info("Download folder", downloads_folder)
 
 for link in links:
-    log.info(f"Started Processing", f"{link[:30]}...{link[60:]}")
+    log.info(f"Started processing", f"{link[:30]}...{link[60:]}")
     response = primp.get(link, headers=headers)
 
     if response.status_code != 200:
-        log.error(f"Failed To Fetch Page", response.status_code)
+        log.error(f"Failed to fetch page", response.status_code)
         continue
 
     soup = BeautifulSoup(response.text, 'html.parser')
     meta_title = soup.find('meta', attrs={'name': 'title'})
     file_name = meta_title['content'] if meta_title else "default_file_name"
-    script_tags = soup.find_all('script')
-    download_function = None
-    for script in script_tags:
-        if 'function download' in script.text:
-            download_function = script.text
-            break
 
-    if download_function:
-        match = re.search(r'window\.open\(["\'](https?://[^\s"\'\)]+)', download_function)
-        if match:
-            download_url = match.group(1)
-            log.info(f"Found Download Url", f"{download_url[:70]}...")
-            output_path = os.path.join(downloads_folder, file_name)
-            try:
-                download_file(download_url, output_path)
-                remove_link(link)
-            except Exception as e:
-                log.error(f"Failed To Download File", str(e))
-        else:
-            log.error("No Download Url Found", response.status_code)
-    else:
-        log.error("Download Function Not Found", response.status_code)
+    download_btn = soup.find('a', class_='link-button')
+    if not download_btn:
+        log.error("Download button not found", response.status_code)
+        continue
+
+    go_path = download_btn.get('hx-post')
+    if not go_path:
+        log.error("hx-post attribute not found", response.status_code)
+        continue
+
+    go_url = urljoin(response.url, go_path)
+
+    post_headers = {
+        'accept': '*/*',
+        'content-type': 'application/x-www-form-urlencoded',
+        'hx-request': 'true',
+        'hx-current-url': response.url,
+        'origin': 'https://fuckingfast.co',
+        'referer': response.url,
+        'user-agent': headers['user-agent'],
+    }
+
+    go_response = primp.post(go_url, headers=post_headers)
+
+    download_url = (
+        go_response.headers.get('HX-Redirect')
+        or go_response.headers.get('hx-redirect')
+    )
+
+    if not download_url:
+        log.error("HX-Redirect header missing", go_response.headers)
+        continue
+
+    log.info("Fetched download url", f"{download_url[:70]}...")
+
+    output_path = os.path.join(downloads_folder, file_name)
+
+    try:
+        download_file(download_url, output_path)
+        remove_link(link)
+    except Exception as e:
+        log.error("Failed to download file", str(e))
