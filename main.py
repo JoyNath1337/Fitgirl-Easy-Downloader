@@ -1,9 +1,10 @@
-import os, re, requests, primp
+import os, re, requests, primp, json, threading, queue
 from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 from datetime import datetime
 from colorama import Fore, Style
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class console:
     def __init__(self) -> None:
@@ -39,6 +40,23 @@ class console:
 log = console()
 log.clear()
 
+def load_settings(settings_file='settings.json'):
+    default_settings = {"max_connections": 8}
+    if os.path.exists(settings_file):
+        try:
+            with open(settings_file, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+                return settings
+        except Exception as e:
+            log.warning("Could not parse settings.json, using defaults", str(e))
+    else:
+        log.warning("settings.json not found, using defaults", "")
+    return default_settings
+
+settings = load_settings()
+max_connections = settings.get("max_connections", 8)
+log.info("Max connections set to", max_connections)
+
 headers = {
     'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
     'accept-language': 'en-US,en;q=0.5',
@@ -49,7 +67,9 @@ headers = {
     'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
 }
 
-def download_file(download_url, output_path):
+file_lock = threading.Lock()
+
+def download_file(download_url, output_path, position=0):
     response = requests.get(download_url, stream=True)
     if response.status_code == 200:
         total_size = int(response.headers.get('content-length', 0))
@@ -60,26 +80,88 @@ def download_file(download_url, output_path):
             unit='B',
             unit_scale=True,
             unit_divisor=1024,
+            position=position,
+            leave=False
         ) as bar:
             for data in response.iter_content(block_size):
                 f.write(data)
                 bar.set_description(f"{log.colors['lightblack']}{log.timestamp()} » {log.colors['lightblue']}INFO {log.colors['lightblack']}• {log.colors['white']}Downloading -> {os.path.basename(output_path)[:55]} {log.colors['reset']}")
                 bar.update(len(data))
 
-        log.success(f"Successfully downloaded file", F"{output_path[:35]}...{output_path[55:]}")
+        log.success("Successfully downloaded file", f"{output_path[:35]}...{output_path[55:]}" if len(output_path) > 55 else output_path)
     else:
-        log.error(f"Failed to download file", response.status_code)
+        log.error("Failed to download file", response.status_code)
 
 def remove_link(processed_link, input_file='input.txt'):
-    with open(input_file, 'r') as file:
-        links = file.readlines()
-        
-    with open(input_file, 'w') as file:
-        for link in links:
-            if link.strip() != processed_link:
-                file.write(link)
+    with file_lock:
+        with open(input_file, 'r', encoding='utf-8') as file:
+            links = file.readlines()
+            
+        with open(input_file, 'w', encoding='utf-8') as file:
+            for link in links:
+                if link.strip() != processed_link:
+                    file.write(link)
 
-with open('input.txt', 'r') as file:
+def process_link(link, downloads_folder, slot_queue):
+    slot = slot_queue.get()
+    try:
+        log.info("Started processing", f"{link[:30]}...{link[60:]}" if len(link) > 60 else link)
+        response = primp.get(link, headers=headers)
+
+        if response.status_code != 200:
+            log.error("Failed to fetch page", response.status_code)
+            return
+
+        soup = BeautifulSoup(response.text, 'html.parser')
+        meta_title = soup.find('meta', attrs={'name': 'title'})
+        file_name = meta_title['content'] if meta_title else "default_file_name"
+
+        download_btn = soup.find('a', class_='link-button')
+        if not download_btn:
+            log.error("Download button not found", response.status_code)
+            return
+
+        go_path = download_btn.get('hx-post')
+        if not go_path:
+            log.error("hx-post attribute not found", response.status_code)
+            return
+
+        go_url = urljoin(response.url, go_path)
+
+        post_headers = {
+            'accept': '*/*',
+            'content-type': 'application/x-www-form-urlencoded',
+            'hx-request': 'true',
+            'hx-current-url': response.url,
+            'origin': 'https://fuckingfast.co',
+            'referer': response.url,
+            'user-agent': headers['user-agent'],
+        }
+
+        go_response = primp.post(go_url, headers=post_headers)
+
+        download_url = (
+            go_response.headers.get('HX-Redirect')
+            or go_response.headers.get('hx-redirect')
+        )
+
+        if not download_url:
+            log.error("HX-Redirect header missing", go_response.headers)
+            return
+
+        log.info("Fetched download url", f"{download_url[:70]}...")
+
+        output_path = os.path.join(downloads_folder, file_name)
+
+        try:
+            download_file(download_url, output_path, position=slot)
+            remove_link(link)
+        except Exception as e:
+            log.error("Failed to download file", str(e))
+    finally:
+        slot_queue.put(slot)
+
+with open('input.txt', 'r', encoding='utf-8') as file:
     links = [line.strip() for line in file if line.strip()]
 
 if not links:
@@ -95,57 +177,16 @@ downloads_folder = os.path.join("downloads", game_name)
 os.makedirs(downloads_folder, exist_ok=True)
 log.info("Download folder", downloads_folder)
 
-for link in links:
-    log.info(f"Started processing", f"{link[:30]}...{link[60:]}")
-    response = primp.get(link, headers=headers)
+slot_queue = queue.Queue()
+for i in range(max_connections):
+    slot_queue.put(i)
 
-    if response.status_code != 200:
-        log.error(f"Failed to fetch page", response.status_code)
-        continue
+with ThreadPoolExecutor(max_workers=max_connections) as executor:
+    futures = [executor.submit(process_link, link, downloads_folder, slot_queue) for link in links]
+    for future in as_completed(futures):
+        try:
+            future.result()
+        except Exception as e:
+            log.error("Task failed with error", str(e))
 
-    soup = BeautifulSoup(response.text, 'html.parser')
-    meta_title = soup.find('meta', attrs={'name': 'title'})
-    file_name = meta_title['content'] if meta_title else "default_file_name"
-
-    download_btn = soup.find('a', class_='link-button')
-    if not download_btn:
-        log.error("Download button not found", response.status_code)
-        continue
-
-    go_path = download_btn.get('hx-post')
-    if not go_path:
-        log.error("hx-post attribute not found", response.status_code)
-        continue
-
-    go_url = urljoin(response.url, go_path)
-
-    post_headers = {
-        'accept': '*/*',
-        'content-type': 'application/x-www-form-urlencoded',
-        'hx-request': 'true',
-        'hx-current-url': response.url,
-        'origin': 'https://fuckingfast.co',
-        'referer': response.url,
-        'user-agent': headers['user-agent'],
-    }
-
-    go_response = primp.post(go_url, headers=post_headers)
-
-    download_url = (
-        go_response.headers.get('HX-Redirect')
-        or go_response.headers.get('hx-redirect')
-    )
-
-    if not download_url:
-        log.error("HX-Redirect header missing", go_response.headers)
-        continue
-
-    log.info("Fetched download url", f"{download_url[:70]}...")
-
-    output_path = os.path.join(downloads_folder, file_name)
-
-    try:
-        download_file(download_url, output_path)
-        remove_link(link)
-    except Exception as e:
-        log.error("Failed to download file", str(e))
+log.done("All downloads finished", "")
