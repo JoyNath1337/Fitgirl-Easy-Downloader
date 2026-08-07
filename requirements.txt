@@ -4,3 +4,4 @@ tqdm
 colorama
 pyperclip
 primp
+nodriver
