@@ -1,7 +1,7 @@
 import os
 import re
+import sys
 import json
-import time
 import asyncio
 import requests
 import nodriver as uc
@@ -48,7 +48,8 @@ log = console()
 log.clear()
 
 CF_WAIT_SECS = 120
-TURNSTILE_WAIT_SECS = 90
+TURNSTILE_WAIT_SECS = 25
+CLICK_WIDGET_AFTER_SECS = 7
 TYPICAL_PART_SIZE = 524288000
 PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".ff_browser_profile")
 
@@ -140,17 +141,28 @@ def file_id_from_link(link):
 
 
 async def js(tab, expression, await_promise=False):
-    """Evaluate JS and always get a real Python value back from nodriver."""
-    return await tab.evaluate(
+    """Evaluate JS that returns a JSON string, and decode it.
+
+    nodriver hands back its internal RemoteObject whenever a result is falsy,
+    which reads as truthy in Python, so every result is JSON encoded in the
+    page and decoded here.
+    """
+    raw = await tab.evaluate(
         expression,
         await_promise=await_promise,
         return_by_value=True,
     )
+    if not isinstance(raw, str):
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return None
 
 
 async def page_ready(tab):
     """True once Cloudflare interstitial is gone and download page loaded."""
-    raw = await js(
+    state = await js(
         tab,
         """(() => {
             const title = document.title || '';
@@ -165,15 +177,8 @@ async def page_ready(tab):
             return JSON.stringify({ hasChallenge, hasDownload, title });
         })()""",
     )
-    if not raw:
+    if not isinstance(state, dict):
         return False
-    if isinstance(raw, dict):
-        state = raw
-    else:
-        try:
-            state = json.loads(raw)
-        except Exception:
-            return False
     return bool(not state.get("hasChallenge") and state.get("hasDownload"))
 
 
@@ -194,52 +199,56 @@ async def wait_for_cf_clear(tab):
     return False
 
 
+async def has_turnstile_widget(tab):
+    """Trusted sessions get served the page without a captcha widget at all."""
+    return await js(tab, "JSON.stringify(!!document.getElementById('cf-turnstile'))") is True
+
+
+async def click_turnstile_widget(tab):
+    """Nudge an interactive Turnstile checkbox that is waiting on a real click."""
+    try:
+        widget = await tab.select("#cf-turnstile", timeout=2)
+        await widget.mouse_click()
+        return True
+    except Exception:
+        return False
+
+
 async def wait_for_turnstile(tab):
+    """Wait for a fresh Turnstile token; it is single use per /go request."""
     log.info("Waiting for Turnstile token", "click checkbox if shown")
+    clicked = False
     for i in range(TURNSTILE_WAIT_SECS):
         try:
             token = await js(
                 tab,
-                """(() => {
-                    return window.turnstileToken
-                        || document.querySelector('[name="cf-turnstile-response"]')?.value
-                        || '';
-                })()""",
+                """JSON.stringify(
+                    window.turnstileToken
+                    || document.querySelector('[name="cf-turnstile-response"]')?.value
+                    || ''
+                )""",
             )
             if isinstance(token, str) and len(token) > 20:
                 log.success("Turnstile ready", f"after {i + 1}s")
                 return token
-            # Button may already be unlocked via previous success on this page
-            cleared = await js(tab, "!!window.dlCleared")
-            if cleared:
-                log.info("dlCleared set", "trying without fresh token")
-                return ""
         except Exception:
             pass
+
+        if not clicked and i == CLICK_WIDGET_AFTER_SECS:
+            clicked = await click_turnstile_widget(tab)
+            if clicked:
+                log.info("Clicked Turnstile widget", "waiting for token")
+
         await asyncio.sleep(1)
-        if i and i % 15 == 0:
-            log.info("Still waiting for Turnstile", f"{i}s")
     return None
 
 
-async def resolve_direct_url(tab, link):
-    file_id = file_id_from_link(link)
-    await tab.get(link)
-
-    if not await wait_for_cf_clear(tab):
-        return None, "Stuck on Cloudflare 'Just a moment' page"
-
-    token = await wait_for_turnstile(tab)
-    if token is None:
-        return None, "Turnstile token not ready"
-
-    raw = await js(
+async def post_go(tab, file_id, token):
+    """Ask /go for the direct link from inside the cleared browser session."""
+    return await js(
         tab,
         f"""
         (async () => {{
-            const token = window.turnstileToken
-                || document.querySelector('[name="cf-turnstile-response"]')?.value
-                || '';
             const response = await fetch('/f/{file_id}/go', {{
                 method: 'POST',
                 headers: {{
@@ -248,7 +257,7 @@ async def resolve_direct_url(tab, link):
                     'hx-current-url': location.href,
                     'referer': location.href,
                 }},
-                body: new URLSearchParams({{ 'cf-turnstile-response': token }}),
+                body: new URLSearchParams({{ 'cf-turnstile-response': {json.dumps(token)} }}),
             }});
             const redirect = response.headers.get('HX-Redirect')
                 || response.headers.get('hx-redirect');
@@ -263,18 +272,64 @@ async def resolve_direct_url(tab, link):
         await_promise=True,
     )
 
-    if isinstance(raw, dict):
-        result = raw
-    else:
-        try:
-            result = json.loads(raw)
-        except Exception:
-            return None, f"Unexpected browser response: {raw!r}"
 
-    if result.get("redirect"):
-        return result["redirect"], None
-    return None, f"No HX-Redirect ({result.get('body') or result.get('status')})"
+async def resolve_direct_url(tab, link, attempts=4):
+    """Reloading the page each attempt gives Turnstile a fresh widget to solve."""
+    file_id = file_id_from_link(link)
+    last_error = "unknown error"
 
+    for attempt in range(1, attempts + 1):
+        await tab.get(link)
+
+        if not await wait_for_cf_clear(tab):
+            last_error = "Stuck on Cloudflare 'Just a moment' page"
+        else:
+            if await has_turnstile_widget(tab):
+                token = await wait_for_turnstile(tab)
+            else:
+                log.info("No captcha widget on page", "session already trusted")
+                token = ""
+
+            if token is None:
+                last_error = "Turnstile token not ready"
+            else:
+                result = await post_go(tab, file_id, token)
+                if not isinstance(result, dict):
+                    last_error = f"Unexpected browser response: {result!r}"
+                elif result.get("redirect"):
+                    return result["redirect"], None
+                else:
+                    last_error = f"No HX-Redirect ({result.get('body') or result.get('status')})"
+
+        if attempt < attempts:
+            log.warning("Retrying link", f"attempt {attempt + 1}/{attempts} — {last_error}")
+            await asyncio.sleep(3)
+
+    return None, last_error
+
+
+
+async def shutdown_browser(browser):
+    """Close Chrome and let its pipes drain before the event loop goes away."""
+    try:
+        browser.stop()
+    except Exception:
+        pass
+
+    process = getattr(getattr(browser, "config", None), "browser_process", None)
+    if process is not None:
+        for _ in range(20):
+            if process.poll() is not None:
+                break
+            await asyncio.sleep(0.1)
+        else:
+            try:
+                process.kill()
+            except Exception:
+                pass
+
+    # Give the transports a turn of the loop to close themselves.
+    await asyncio.sleep(0.5)
 
 
 async def run(links, downloads_folder):
@@ -325,13 +380,23 @@ async def run(links, downloads_folder):
 
             await asyncio.sleep(1)
     finally:
-        try:
-            browser.stop()
-        except Exception:
-            pass
+        await shutdown_browser(browser)
+
+
+def silence_pipe_teardown_noise(unraisable):
+    """Chrome's pipes are collected after the loop closes, which asyncio reports
+    from __del__ as an unraisable error. Nothing actionable, so drop only those."""
+    message = str(unraisable.exc_value)
+    if isinstance(unraisable.exc_value, (ValueError, RuntimeError)) and (
+        "closed pipe" in message or "Event loop is closed" in message
+    ):
+        return
+    sys.__unraisablehook__(unraisable)
 
 
 def main():
+    sys.unraisablehook = silence_pipe_teardown_noise
+
     with open("input.txt", "r", encoding="utf-8") as file:
         links = [line.strip() for line in file if line.strip()]
 
