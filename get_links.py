@@ -46,7 +46,7 @@ if not links:
     log.error("No Matching URLs Found", "Retry..")
 else:
     output = "\n".join(links)
-    print("🔗 Matching URLs :")
+    print("Matching URLs :")
     print(output)
     pyperclip.copy(output)
 
