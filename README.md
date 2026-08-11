@@ -12,6 +12,8 @@ Ensure you have the following installed before running the script :
 pip install -r requirements.txt
 ```
 
+Google Chrome is required (used to pass Cloudflare / Turnstile checks).
+
 ## Usage
 
 1. **Get Direct Download Links** : Run `get_links.py`, enter the Fitgirl game page URL, and all FuckingFast links will be copied to your clipboard automatically.
@@ -24,7 +26,10 @@ pip install -r requirements.txt
    python main.py
    ```
 4. The script will :
+   - Open a Chrome window to clear Cloudflare / Turnstile (click the checkbox if asked).
    - Process each link in `input.txt`.
+   - Skip files that are already fully downloaded.
+   - Resume partial downloads when possible.
    - Extract and download files to the `downloads/<game-name>/` folder.
    - Remove processed links from `input.txt`.
 
