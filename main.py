@@ -1,38 +1,28 @@
-import os
-import re
-import sys
-import json
-import asyncio
-import requests
+import os, re, sys, json, asyncio, requests, winreg
 import nodriver as uc
 from urllib.parse import urlparse
 from tqdm import tqdm
 from datetime import datetime
 from colorama import Fore, Style
 
-
 class console:
     def __init__(self) -> None:
-        self.colors = {
-            "green": Fore.GREEN, "red": Fore.RED, "yellow": Fore.YELLOW, "blue": Fore.BLUE,
-            "magenta": Fore.MAGENTA, "cyan": Fore.CYAN, "white": Fore.WHITE, "black": Fore.BLACK,
-            "reset": Style.RESET_ALL, "lightblack": Fore.LIGHTBLACK_EX, "lightred": Fore.LIGHTRED_EX,
-            "lightgreen": Fore.LIGHTGREEN_EX, "lightyellow": Fore.LIGHTYELLOW_EX,
-            "lightblue": Fore.LIGHTBLUE_EX, "lightmagenta": Fore.LIGHTMAGENTA_EX,
-            "lightcyan": Fore.LIGHTCYAN_EX, "lightwhite": Fore.LIGHTWHITE_EX,
-        }
+        self.colors = {"green": Fore.GREEN, "red": Fore.RED, "yellow": Fore.YELLOW, "blue": Fore.BLUE, "magenta": Fore.MAGENTA, "cyan": Fore.CYAN, "white": Fore.WHITE, "black": Fore.BLACK, "reset": Style.RESET_ALL, "lightblack": Fore.LIGHTBLACK_EX, "lightred": Fore.LIGHTRED_EX, "lightgreen": Fore.LIGHTGREEN_EX, "lightyellow": Fore.LIGHTYELLOW_EX, "lightblue": Fore.LIGHTBLUE_EX, "lightmagenta": Fore.LIGHTMAGENTA_EX, "lightcyan": Fore.LIGHTCYAN_EX, "lightwhite": Fore.LIGHTWHITE_EX}
 
     def clear(self):
         os.system("cls" if os.name == "nt" else "clear")
 
     def timestamp(self):
         return datetime.now().strftime("%H:%M:%S")
-
+    
     def success(self, message, obj):
         print(f"{self.colors['lightblack']}{self.timestamp()} » {self.colors['lightgreen']}SUCC {self.colors['lightblack']}• {self.colors['white']}{message} : {self.colors['lightgreen']}{obj}{self.colors['white']} {self.colors['reset']}")
 
     def error(self, message, obj):
         print(f"{self.colors['lightblack']}{self.timestamp()} » {self.colors['lightred']}ERRR {self.colors['lightblack']}• {self.colors['white']}{message} : {self.colors['lightred']}{obj}{self.colors['white']} {self.colors['reset']}")
+
+    def done(self, message, obj):
+        print(f"{self.colors['lightblack']}{self.timestamp()} » {self.colors['lightmagenta']}DONE {self.colors['lightblack']}• {self.colors['white']}{message} : {self.colors['lightmagenta']}{obj}{self.colors['white']} {self.colors['reset']}")
 
     def warning(self, message, obj):
         print(f"{self.colors['lightblack']}{self.timestamp()} » {self.colors['lightyellow']}WARN {self.colors['lightblack']}• {self.colors['white']}{message} : {self.colors['lightyellow']}{obj}{self.colors['white']} {self.colors['reset']}")
@@ -40,9 +30,11 @@ class console:
     def info(self, message, obj):
         print(f"{self.colors['lightblack']}{self.timestamp()} » {self.colors['lightblue']}INFO {self.colors['lightblack']}• {self.colors['white']}{message} : {self.colors['lightblue']}{obj}{self.colors['white']} {self.colors['reset']}")
 
-    def done(self, message, obj):
-        print(f"{self.colors['lightblack']}{self.timestamp()} » {self.colors['lightmagenta']}DONE {self.colors['lightblack']}• {self.colors['white']}{message} : {self.colors['lightmagenta']}{obj}{self.colors['white']} {self.colors['reset']}")
+    def custom(self, message, obj, color):
+        print(f"{self.colors['lightblack']}{self.timestamp()} » {self.colors[color.upper()]}{color.upper()} {self.colors['lightblack']}• {self.colors['white']}{message} : {self.colors[color.upper()]}{obj}{self.colors['white']} {self.colors['reset']}")
 
+    def input(self, message):
+        return input(f"{self.colors['lightblack']}{self.timestamp()} » {self.colors['lightcyan']}INPUT   {self.colors['lightblack']}• {self.colors['white']}{message}{self.colors['reset']}")
 
 log = console()
 log.clear()
@@ -51,8 +43,68 @@ CF_WAIT_SECS = 120
 TURNSTILE_WAIT_SECS = 25
 CLICK_WIDGET_AFTER_SECS = 7
 TYPICAL_PART_SIZE = 524288000
-PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".ff_browser_profile")
+PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".temp_browser_profile")
 
+def get_default_browser():
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice"
+        ) as key:
+            prog_id, _ = winreg.QueryValueEx(key, "ProgId")
+
+        command_paths = [
+            rf"Software\Classes\{prog_id}\shell\open\command",
+            rf"Software\Classes\{prog_id}\Application",
+        ]
+
+        for path in command_paths:
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    path
+                ) as key:
+                    command, _ = winreg.QueryValueEx(key, "")
+                    if command:
+                        match = re.match(r'"([^"]+\.exe)"', command)
+
+                        if match:
+                            exe = match.group(1)
+                            if os.path.isfile(exe):
+                                return exe
+
+                        match = re.match(r'(.+?\.exe)', command, re.IGNORECASE)
+                        if match:
+                            exe = match.group(1).strip('"')
+                            if os.path.isfile(exe):
+                                return exe
+
+            except FileNotFoundError:
+                pass
+
+        for path in command_paths:
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    path
+                ) as key:
+                    command, _ = winreg.QueryValueEx(key, "")
+
+                    if command:
+                        match = re.match(r'"([^"]+\.exe)"', command)
+
+                        if match:
+                            exe = match.group(1)
+                            if os.path.isfile(exe):
+                                return exe
+
+            except FileNotFoundError:
+                pass
+
+    except Exception as e:
+        log.warning("Could not detect default browser", str(e))
+
+    return None
 
 def resolve_output_path(downloads_folder, file_name):
     candidates = [
@@ -63,7 +115,6 @@ def resolve_output_path(downloads_folder, file_name):
         if os.path.isfile(path):
             return path
     return candidates[0]
-
 
 def download_file(download_url, output_path):
     existing_size = os.path.getsize(output_path) if os.path.isfile(output_path) else 0
@@ -126,7 +177,6 @@ def download_file(download_url, output_path):
     log.success("Successfully downloaded file", short)
     return True
 
-
 def remove_link(processed_link, input_file="input.txt"):
     with open(input_file, "r", encoding="utf-8") as file:
         links = file.readlines()
@@ -135,10 +185,8 @@ def remove_link(processed_link, input_file="input.txt"):
             if link.strip() != processed_link:
                 file.write(link)
 
-
 def file_id_from_link(link):
     return urlparse(link).path.strip("/").split("/")[-1]
-
 
 async def js(tab, expression, await_promise=False):
     """Evaluate JS that returns a JSON string, and decode it.
@@ -158,7 +206,6 @@ async def js(tab, expression, await_promise=False):
         return json.loads(raw)
     except ValueError:
         return None
-
 
 async def page_ready(tab):
     """True once Cloudflare interstitial is gone and download page loaded."""
@@ -181,7 +228,6 @@ async def page_ready(tab):
         return False
     return bool(not state.get("hasChallenge") and state.get("hasDownload"))
 
-
 async def wait_for_cf_clear(tab):
     log.info("Waiting for Cloudflare check", "solve/wait in the browser window if needed")
     last_err = None
@@ -198,11 +244,9 @@ async def wait_for_cf_clear(tab):
             log.info("Still waiting for download page", f"{i}s{extra}")
     return False
 
-
 async def has_turnstile_widget(tab):
     """Trusted sessions get served the page without a captcha widget at all."""
     return await js(tab, "JSON.stringify(!!document.getElementById('cf-turnstile'))") is True
-
 
 async def click_turnstile_widget(tab):
     """Nudge an interactive Turnstile checkbox that is waiting on a real click."""
@@ -212,7 +256,6 @@ async def click_turnstile_widget(tab):
         return True
     except Exception:
         return False
-
 
 async def wait_for_turnstile(tab):
     """Wait for a fresh Turnstile token; it is single use per /go request."""
@@ -242,7 +285,6 @@ async def wait_for_turnstile(tab):
         await asyncio.sleep(1)
     return None
 
-
 async def post_go(tab, file_id, token):
     """Ask /go for the direct link from inside the cleared browser session."""
     return await js(
@@ -271,7 +313,6 @@ async def post_go(tab, file_id, token):
         """,
         await_promise=True,
     )
-
 
 async def resolve_direct_url(tab, link, attempts=4):
     """Reloading the page each attempt gives Turnstile a fresh widget to solve."""
@@ -307,10 +348,8 @@ async def resolve_direct_url(tab, link, attempts=4):
 
     return None, last_error
 
-
-
 async def shutdown_browser(browser):
-    """Close Chrome and let its pipes drain before the event loop goes away."""
+    """Close browser and let its pipes drain before the event loop goes away."""
     try:
         browser.stop()
     except Exception:
@@ -331,14 +370,21 @@ async def shutdown_browser(browser):
     # Give the transports a turn of the loop to close themselves.
     await asyncio.sleep(0.5)
 
-
 async def run(links, downloads_folder):
     os.makedirs(PROFILE_DIR, exist_ok=True)
     log.info("Launching browser", "nodriver + persistent profile")
 
+    browser_executable = get_default_browser()
+
+    if browser_executable:
+        log.info("Default browser detected", browser_executable)
+    else:
+        log.warning("Default browser not detected", "letting nodriver choose")
+
     browser = await uc.start(
         headless=False,
         user_data_dir=PROFILE_DIR,
+        browser_executable_path=browser_executable,
         browser_args=[
             "--window-size=900,700",
             "--disable-popup-blocking",
@@ -382,7 +428,6 @@ async def run(links, downloads_folder):
     finally:
         await shutdown_browser(browser)
 
-
 def silence_pipe_teardown_noise(unraisable):
     """Chrome's pipes are collected after the loop closes, which asyncio reports
     from __del__ as an unraisable error. Nothing actionable, so drop only those."""
@@ -392,7 +437,6 @@ def silence_pipe_teardown_noise(unraisable):
     ):
         return
     sys.__unraisablehook__(unraisable)
-
 
 def main():
     sys.unraisablehook = silence_pipe_teardown_noise
@@ -421,7 +465,6 @@ def main():
 
     asyncio.run(run(links, downloads_folder))
     log.done("Finished", downloads_folder)
-
 
 if __name__ == "__main__":
     main()
