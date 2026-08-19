@@ -2,17 +2,19 @@
 
 This Tool Helps To Download Multiple Files Easily From fitgirl-repacks.site Through fuckingfast.co
 
+
 ## Prerequisites
 
-Ensure you have the following installed before running the script :
+Ensure you have the following installed before running the script:
 
-`Python 3.8+`
+- `Python 3.13` (currently recommended; newer versions may not be supported yet)
+- Required Python packages:
 
 ```bash
 pip install -r requirements.txt
 ```
+> **Note:** Python 3.13 is currently the supported version. Compatibility with newer Python versions has not been confirmed.
 
-Google Chrome is required (used to pass Cloudflare / Turnstile checks).
 
 ## Usage
 
