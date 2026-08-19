@@ -13,7 +13,6 @@ Ensure you have the following installed before running the script:
 ```bash
 pip install -r requirements.txt
 ```
-> **Note:** Python 3.13 is currently the supported version. Compatibility with newer Python versions has not been confirmed.
 
 ## Usage
 
