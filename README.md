@@ -15,7 +15,6 @@ pip install -r requirements.txt
 ```
 > **Note:** Python 3.13 is currently the supported version. Compatibility with newer Python versions has not been confirmed.
 
-
 ## Usage
 
 1. **Get Direct Download Links** : Run `get_links.py`, enter the Fitgirl game page URL, and all FuckingFast links will be copied to your clipboard automatically.
