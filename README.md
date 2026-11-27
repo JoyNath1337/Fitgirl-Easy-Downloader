@@ -14,6 +14,10 @@ Ensure you have the following installed before running the script:
 pip install -r requirements.txt
 ```
 
+- A Chromium-based browser (Chrome, Chromium, Brave, Edge, Vivaldi, ...). Works on Windows and Linux.
+  On Linux the default browser is detected via `xdg-settings`; if it isn't Chromium-based or is a
+  Flatpak/Snap install, nodriver falls back to any Chrome/Chromium it finds on `PATH`.
+
 ## Usage
 
 1. **Get Direct Download Links** : Run `get_links.py`, enter the Fitgirl game page URL, and all FuckingFast links will be copied to your clipboard automatically.
@@ -25,6 +29,12 @@ pip install -r requirements.txt
    ```bash
    python main.py
    ```
+   Options:
+   - `-o, --output PATH` : folder to save into (default `./downloads`), e.g. an external drive.
+   - `-j, --jobs N` : parts to download at the same time (default 3).
+   - `-c, --connections N` : connections per part (default 8, `1` = single stream).
+
+   Press `Ctrl+C` to stop; progress is saved and the next run resumes.
 4. The script will :
    - Open a Chrome window to clear Cloudflare / Turnstile (click the checkbox if asked).
    - Process each link in `input.txt`.
